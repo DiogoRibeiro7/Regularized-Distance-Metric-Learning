@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 # Standard Library Imports
-from typing import List, Tuple, Any
-import scipy
-import cmath
+from cmath import sqrt
+from typing import List, Tuple, Any, Dict, Union
 import random
 
 # Third-Party Imports
 import numpy as np
+import scipy
+from scipy.optimize import root_scalar
+import cmath
 from numpy.polynomial.polynomial import polydiv
 from scipy.optimize import minimize
 from scipy.stats import mode
@@ -154,6 +156,7 @@ def Tfunc_fast(M: np.ndarray, theta: float) -> np.ndarray:
     A[M > 0] = 0
     return np.maximum(M - theta, 0) + A
 
+
 def nearPSD_simple(A: np.ndarray) -> np.ndarray:
     """
     Projects a given matrix onto the positive semi-definite (PSD) cone.
@@ -170,6 +173,7 @@ def nearPSD_simple(A: np.ndarray) -> np.ndarray:
     for val, vec in zip(eig_val[eig_ind], eig_vec[eig_ind]):
         B += val * vec.T @ vec
     return B
+
 
 def perform_ADMM_step(Xtil: np.ndarray, XtilT: np.ndarray, I: np.ndarray, W: np.ndarray, E2: np.ndarray,
                       Ym: np.ndarray, Ytil: np.ndarray, L: np.ndarray, rho: float, alpha: float, tau: float) -> Tuple:
@@ -190,6 +194,7 @@ def perform_ADMM_step(Xtil: np.ndarray, XtilT: np.ndarray, I: np.ndarray, W: np.
     Delta = Z - Ytil + np.multiply(Ym, S)
     L += Delta
     return Z, W, S, Delta, L
+
 
 def convergence_check(Delta: np.ndarray, n: int, tol: float) -> bool:
     """
@@ -274,3 +279,170 @@ def LowRankBiLinear(m: int, X: np.ndarray, Y: List[int], alpha: float, eps: floa
     out = U @ H @ np.diag(np.sqrt(E))
 
     return out
+
+#####################################################################
+#### OASIS_SIM #####
+# Symmetric modification of OASIS by Kyle Miller
+
+
+def initialize_oasis_sim(X: np.ndarray, Y: List[int]) -> Tuple[np.ndarray, Dict[int, List[int]], Dict[int, int]]:
+    """
+    Initialize data structures for OASIS_SIM.
+    """
+    if not isinstance(X, np.matrix):
+        X = np.matrix(X)
+    M, N = X.shape
+
+    Class = {}
+    nC = {}
+    for i, y in enumerate(Y):
+        if y not in Class:
+            Class[y] = []
+            nC[y] = 0
+        Class[y].append(i)
+        nC[y] += 1
+    return X, Class, nC
+
+
+def compute_loss_and_update(L: np.ndarray, tau: float, a: np.ndarray, b: np.ndarray, aa: float, bb: float, ab: float) -> np.ndarray:
+    """
+    Compute loss and update L matrix
+    """
+    d = (1 - tau * ab) ** 2 - aa * bb * tau ** 2
+    La = L * a.T
+    Lb = L * b.T
+    updateL = tau / d * ((1.0 - tau * ab) * (La * b + Lb * a) +
+                         (tau * bb * La) * a + (tau * aa * Lb) * b)
+    L += updateL
+    return L
+
+
+def optimize_tau(C_limit: float, roots: List[float], A42: float, A32: float, A22: float, aa: float, bb: float, ab: float) -> float:
+    """
+    Optimize tau given the roots and coefficients
+    """
+    optimal = (C_limit, float("inf"))
+    for r in roots:
+        d = (1 - r * ab) ** 2 - aa * bb * r ** 2
+        obj = (A42 * r ** 2 + A32 * r + A22) * r ** 2 / (d ** 2)
+        if obj < optimal[1]:
+            optimal = (r, obj)
+    return optimal[0]
+
+
+def solve_quartic(a0: float, a1: float, a2: float, a3: float, a4: float) -> np.ndarray:
+    """
+    Solve the quartic equation using np.roots.
+    """
+    return np.roots([a4, a3, a2, a1, a0])
+
+
+def OASIS_SIM(m: int, X: np.ndarray, Y: List[int], C: float, itmax: int = 10, 
+              batch_size: Union[int, None] = None, loss_tol: float = 1e-3, 
+              epsilon: float = 1e-10, Verbose: bool = True, Lo: Union[np.ndarray, None] = None) -> np.ndarray:
+    """
+    Main function implementing the OASIS_SIM algorithm.
+    """
+    # Initialize the OASIS_SIM environment
+    X, Class, nC = initialize_oasis_sim(X, Y)
+    M, N = X.shape
+
+    # Set batch size and C_limit
+    if batch_size is None: 
+        batch_size = M
+    C_limit = C
+    nY = len(Y)
+
+    # Initialize the L matrix
+    if Lo is None:
+        L = np.asmatrix(np.ones((m, N)))/(m**2 * N**2)
+    else:
+        L = Lo
+    # Initialize running average for loss
+    running_avg_loss = 0.0
+    running_avg_loss2 = 0.0
+    alpha = 0.1  # The weight of the new batch in the running average
+
+    for k in range(itmax):
+        totloss = 0.0
+        totloss2 = 0.0
+
+        for i in range(batch_size):
+            idx = np.random.randint(0, nY)
+            c = Y[idx]
+            r_ref = X[idx, ]
+            pos_idx = Class[c][np.random.randint(0, nC[c])]
+            neg_idx = np.random.randint(0, nY - nC[c])
+            
+            for neg_c in Class:
+                if neg_c == c: 
+                    continue
+                if neg_idx >= nC[neg_c]: 
+                    neg_idx -= nC[neg_c]
+                else:
+                    neg_idx = Class[neg_c][neg_idx]
+                    break
+
+            r_pos = X[pos_idx, ]
+            r_neg = X[neg_idx, ]
+            a = r_ref
+            b = r_pos - r_neg
+            ab = np.sum(a * b.T)
+            aa = np.sum(a * a.T)
+            bb = np.sum(b * b.T)
+
+            if aa == 0 or bb == 0: 
+                continue
+
+            # Compute additional terms
+            La = L * a.T
+            Lb = L * b.T
+            aLLb = np.sum(La.T * Lb)
+            aLLa = np.sum(La.T * La)  # Newly added
+            bLLb = np.sum(Lb.T * Lb)  # Newly added
+
+            if 1 - aLLb <= 0: 
+                continue
+            
+            totloss += (1 - aLLb)
+            totloss2 += (1 - aLLb) ** 2
+
+            # Compute the coefficients for optimization
+            
+            # f function coefficients
+            A42 = 0.5 * (aa * bb - ab ** 2) * (aa * bLLb + bb * aLLa - 2 * ab * aLLb)
+            A32 = 2 * (aa * bb - ab ** 2) * aLLb
+            A22 = 0.5 * (aa * bLLb + bb * aLLa + 2 * ab * aLLb)
+            # q polynomial coefficients
+            a4 = (aa * bb - ab ** 2) ** 2
+            a3 = 4.0 * ab * (aa * bb - ab ** 2)
+            a2 = ab * (aLLa * bb + aa * bLLb) + ((1.0 - aLLb) - 3.0) * (aa * bb - ab ** 2) + 2.0 * ab ** 2 * ((1.0 - aLLb) + 1.0)
+            a1 = -aLLa * bb + 2.0 * aLLb * ab - aa * bLLb - 4.0 * ab
+            a0 = 1.0 - aLLb
+            
+            # Optimize tau and update L
+            roots = [complex_root.real for complex_root in solve_quartic(a0, a1, a2, a3, a4) if complex_root.imag < epsilon and complex_root.real > 0]
+            tau = optimize_tau(C_limit, roots, A42, A32, A22, aa, bb, ab)
+            L = compute_loss_and_update(L, tau, a, b, aa, bb, ab)
+
+        # Update running average
+        running_avg_loss = alpha * (totloss / batch_size) + (1 - alpha) * running_avg_loss
+        running_avg_loss2 = alpha * (totloss2 / batch_size) + (1 - alpha) * running_avg_loss2
+
+        if Verbose:
+            print(f"Iteration {k+1} complete. Running average loss: {running_avg_loss}")
+
+        # Stopping criterion based on running average
+        if running_avg_loss < loss_tol:
+            break
+
+    loss = running_avg_loss
+    loss_sig = np.sqrt((running_avg_loss2 - 2 * loss * running_avg_loss + batch_size * loss ** 2) / float(batch_size - 1))
+    lossCI = 1.96 * loss_sig / np.sqrt(batch_size)
+
+    if running_avg_loss < loss_tol:
+        print(f"Stopping criterion met in {k+1} iterations. Expected loss: {loss} +/- {lossCI} (at 95% confidence)")
+    else:
+        print(f"Maximum number of iterations ({itmax}) exceeded. Expected loss: {loss} +/- {lossCI} (at 95% confidence)")
+
+    return L
