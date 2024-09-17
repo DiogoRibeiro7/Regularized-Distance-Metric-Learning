@@ -77,3 +77,4 @@ A detailed example script will be provided in the `examples/` directory, demonst
 
 - Rong Jin, Shijun Wang, Yang Zhou. "Regularized Distance Metric Learning: Theory and Algorithm." (2009)
 
+
