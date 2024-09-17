@@ -19,7 +19,7 @@ The implementation will cover the following components based on the paper:
 The objective function for regularized distance metric learning is formulated as:
 
 ```math
-\min_A \left\{ \frac{1}{2} \|A\|_F^2 + \frac{2C}{n(n-1)} \sum_{i<j} g \left( y_{i,j} \left[ 1 - \|x_i - x_j\|_A^2 \right] \right) : A \succeq 0, \text{tr}(A) \leq \eta(d) \right\}
+\min_A \left\{ \frac{1}{2} \|A\|_F^2 + \frac{2C}{n(n-1)} \sum_{i < j} g \left( y_{i,j} \left[ 1 - (x_i - x_j)^T A (x_i - x_j) \right] \right) \right\}
 ```
 
 Where:
