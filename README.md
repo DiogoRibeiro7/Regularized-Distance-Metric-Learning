@@ -23,7 +23,7 @@ $$
 $$
 
 Where:
-- \( A \) is the distance metric to be learned.
+-  $A$ is the distance metric to be learned.
 - \( g(\cdot) \) is a loss function, which is typically convex and Lipschitz continuous.
 - \( \|A\|_F^2 \) is the Frobenius norm of the matrix \( A \).
 
